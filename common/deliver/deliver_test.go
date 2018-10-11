@@ -7,9 +7,11 @@ SPDX-License-Identifier: Apache-2.0
 package deliver_test
 
 import (
+	"context"
 	"io"
 	"time"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/timestamp"
 	"github.com/hyperledger/fabric/common/deliver"
 	"github.com/hyperledger/fabric/common/deliver/mock"
@@ -19,7 +21,6 @@ import (
 	ab "github.com/hyperledger/fabric/protos/orderer"
 	"github.com/hyperledger/fabric/protos/utils"
 	"github.com/pkg/errors"
-	"golang.org/x/net/context"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -190,7 +191,7 @@ var _ = Describe("Deliver", func() {
 			Expect(fakeInspector.InspectCallCount()).To(Equal(1))
 			ctx, header := fakeInspector.InspectArgsForCall(0)
 			Expect(ctx).To(Equal(context.Background()))
-			Expect(header).To(Equal(channelHeader))
+			Expect(proto.Equal(header, channelHeader)).To(BeTrue())
 		})
 
 		Context("when channel header validation fails", func() {
@@ -230,7 +231,7 @@ var _ = Describe("Deliver", func() {
 
 			Expect(fakePolicyChecker.CheckPolicyCallCount()).To(BeNumerically(">=", 1))
 			e, cid := fakePolicyChecker.CheckPolicyArgsForCall(0)
-			Expect(e).To(Equal(envelope))
+			Expect(proto.Equal(e, envelope)).To(BeTrue())
 			Expect(cid).To(Equal("chain-id"))
 		})
 
@@ -240,7 +241,7 @@ var _ = Describe("Deliver", func() {
 
 			Expect(fakeBlockReader.IteratorCallCount()).To(Equal(1))
 			startPosition := fakeBlockReader.IteratorArgsForCall(0)
-			Expect(startPosition).To(Equal(seekInfo.Start))
+			Expect(proto.Equal(startPosition, seekInfo.Start)).To(BeTrue())
 		})
 
 		Context("when multiple blocks are requested", func() {
@@ -465,6 +466,33 @@ var _ = Describe("Deliver", func() {
 			})
 		})
 
+		Context("when the client disconnects before reading from the chain", func() {
+			var (
+				ctx    context.Context
+				cancel func()
+				done   chan struct{}
+			)
+
+			BeforeEach(func() {
+				done = make(chan struct{})
+				ctx, cancel = context.WithCancel(context.Background())
+				cancel()
+				fakeBlockIterator.NextStub = func() (*cb.Block, cb.Status) {
+					<-done
+					return nil, cb.Status_BAD_REQUEST
+				}
+			})
+
+			AfterEach(func() {
+				close(done)
+			})
+
+			It("aborts the deliver stream", func() {
+				err := handler.Handle(ctx, server)
+				Expect(err).To(MatchError("context finished before block retrieved: context canceled"))
+			})
+		})
+
 		Context("when the chain errors before reading from the chain", func() {
 			BeforeEach(func() {
 				close(errCh)
@@ -482,11 +510,22 @@ var _ = Describe("Deliver", func() {
 		})
 
 		Context("when the chain errors while reading from the chain", func() {
+			var doneCh chan struct{}
+
 			BeforeEach(func() {
+				doneCh = make(chan struct{})
+				fakeBlockIterator.NextStub = func() (*cb.Block, cb.Status) {
+					<-doneCh
+					return &cb.Block{}, cb.Status_INTERNAL_SERVER_ERROR
+				}
 				fakeChain.ReaderStub = func() blockledger.Reader {
 					close(errCh)
 					return fakeBlockReader
 				}
+			})
+
+			AfterEach(func() {
+				close(doneCh)
 			})
 
 			It("sends status service unavailable", func() {

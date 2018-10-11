@@ -62,7 +62,7 @@ Here's the help text for the ``byfn.sh`` script:
       -d <delay> - delay duration in seconds (defaults to 3)
       -f <docker-compose-file> - specify which docker-compose file use (defaults to docker-compose-cli.yaml)
       -s <dbtype> - the database backend to use: goleveldb (default) or couchdb
-      -l <language> - the chaincode language: golang (default) or node
+      -l <language> - the chaincode language: golang (default), node or java
       -i <imagetag> - the tag to be used to launch the network (defaults to "latest")
       -v - verbose mode
     byfn.sh -h (print this message)
@@ -161,7 +161,8 @@ Next, you can bring the network up with one of the following commands:
 
 The above command will compile Golang chaincode images and spin up the corresponding
 containers.  Go is the default chaincode language, however there is also support
-for `Node.js <https://fabric-shim.github.io/>`__ chaincode.  If you'd like to run through this tutorial with node
+for `Node.js <https://fabric-shim.github.io/>`_ and `Java <https://fabric-chaincode-java.github.io/>`_
+chaincode.  If you'd like to run through this tutorial with node
 chaincode, pass the following command instead:
 
 .. code:: bash
@@ -171,8 +172,20 @@ chaincode, pass the following command instead:
 
   ./byfn.sh up -l node
 
-.. note:: View the `Hyperledger Fabric Shim <https://fabric-shim.github.io/ChaincodeStub.html>`__
-          documentation for more info on the node.js chaincode shim APIs.
+.. note:: For more information on the Node.js shim, please refer to its
+          `documentation <https://fabric-shim.github.io/fabric-shim.ChaincodeInterface.html>`_.
+
+.. note:: For more information on the Java shim, please refer to its
+          `documentation <https://fabric-chaincode-java.github.io/org/hyperledger/fabric/shim/Chaincode.html>`_.
+
+Тo make the sample run with Java chaincode, you have to specify ``-l java`` as follows:
+
+.. code:: bash
+
+  ./byfn.sh up -l java
+
+.. note:: Do not run both of these commands. Only one language can be tried unless
+          you bring down and recreate the network between.
 
 Once again, you will be prompted as to whether you wish to continue or abort.
 Respond with a ``y`` or hit the return key:
@@ -208,7 +221,7 @@ completion, it should report the following in your terminal window:
 
     Query Result: 90
     2017-05-16 17:08:15.158 UTC [main] main -> INFO 008 Exiting.....
-    ===================== Query successful on peer1.org2 on channel 'mychannel' ===================== 
+    ===================== Query successful on peer1.org2 on channel 'mychannel' =====================
 
     ===================== All GOOD, BYFN execution completed =====================
 
@@ -348,7 +361,7 @@ saved to a folder titled ``crypto-config``.
 Configuration Transaction Generator
 -----------------------------------
 
-The ``configtxgen tool`` is used to create four configuration artifacts:
+The ``configtxgen`` tool is used to create four configuration artifacts:
 
   * orderer ``genesis block``,
   * channel ``configuration transaction``,
@@ -434,7 +447,7 @@ Then, we'll invoke the ``configtxgen`` tool to create the orderer genesis block:
 
 .. code:: bash
 
-    ../bin/configtxgen -profile TwoOrgsOrdererGenesis -outputBlock ./channel-artifacts/genesis.block
+    ../bin/configtxgen -profile TwoOrgsOrdererGenesis -channelID byfn-sys-channel -outputBlock ./channel-artifacts/genesis.block
 
 You should see an output similar to the following in your terminal:
 
@@ -446,7 +459,7 @@ You should see an output similar to the following in your terminal:
 
 .. note:: The orderer genesis block and the subsequent artifacts we are about to create
           will be output into the ``channel-artifacts`` directory at the root of this
-          project.
+          project. The `channelID` in the above command is the name of the system channel.
 
 .. _createchanneltx:
 
@@ -462,7 +475,7 @@ set ``CHANNEL_NAME`` as an environment variable that can be used throughout thes
 
     export CHANNEL_NAME=mychannel  && ../bin/configtxgen -profile TwoOrgsChannel -outputCreateChannelTx ./channel-artifacts/channel.tx -channelID $CHANNEL_NAME
 
-You should see an ouput similar to the following in your terminal:
+You should see an output similar to the following in your terminal:
 
 .. code:: bash
 
@@ -516,9 +529,10 @@ For the following CLI commands against ``peer0.org1.example.com`` to work, we ne
 to preface our commands with the four environment variables given below.  These
 variables for ``peer0.org1.example.com`` are baked into the CLI container,
 therefore we can operate without passing them.  **HOWEVER**, if you want to send
-calls to other peers or the orderer, then you will need to provide these
-values accordingly.  Inspect the ``docker-compose-base.yaml`` for the specific
-paths:
+calls to other peers or the orderer, then you can provide these
+values accordingly by editing the  ``docker-compose-base.yaml`` before starting the
+container. Modify the following four environment variables to use a different
+peer and org.
 
 .. code:: bash
 
@@ -553,6 +567,19 @@ If successful you should see the following:
 
         root@0d78bb69300d:/opt/gopath/src/github.com/hyperledger/fabric/peer#
 
+If you do not want to run the CLI commands against the default peer
+``peer0.org1.example.com``, replace the values of ``peer0`` or ``org1`` in the
+four environment variables and run the commands:
+
+.. code:: bash
+
+    # Environment variables for PEER0
+
+    export CORE_PEER_MSPCONFIGPATH=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/org1.example.com/users/Admin@org1.example.com/msp
+    export CORE_PEER_ADDRESS=peer0.org1.example.com:7051
+    export CORE_PEER_LOCALMSPID="Org1MSP"
+    export CORE_PEER_TLS_ROOTCERT_FILE=/opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/peerOrganizations/org1.example.com/peers/peer0.org1.example.com/tls/ca.crt
+
 Next, we are going to pass in the generated channel configuration transaction
 artifact that we created in the :ref:`createchanneltx` section (we called
 it ``channel.tx``) to the orderer as part of the create channel request.
@@ -561,7 +588,10 @@ We specify our channel name with the ``-c`` flag and our channel configuration
 transaction with the ``-f`` flag. In this case it is ``channel.tx``, however
 you can mount your own configuration transaction with a different name.  Once again
 we will set the ``CHANNEL_NAME`` environment variable within our CLI container so that
-we don't have to explicitly pass this argument:
+we don't have to explicitly pass this argument. Channel names must be all lower
+case, less than 250 characters long and match the regular expression
+``[a-z][a-z0-9.-]*``.
+
 
 .. code:: bash
 
@@ -649,7 +679,7 @@ Applications interact with the blockchain ledger through ``chaincode``.  As
 such we need to install the chaincode on every peer that will execute and
 endorse our transactions, and then instantiate the chaincode on the channel.
 
-First, install the sample Go or Node.js chaincode onto one of the four peer nodes.  These commands
+First, install the sample Go, Node.js or Java chaincode onto one of the four peer nodes.  These commands
 place the specified source code flavor onto our peer's filesystem.
 
 .. note:: You can only install one version of the source code per chaincode name
@@ -672,6 +702,12 @@ place the specified source code flavor onto our peer's filesystem.
     # this installs the Node.js chaincode
     # make note of the -l flag; we use this to specify the language
     peer chaincode install -n mycc -v 1.0 -l node -p /opt/gopath/src/github.com/chaincode/chaincode_example02/node/
+
+**Java**
+
+.. code:: bash
+
+    peer chaincode install -n mycc -v 1.0 -l java -p /opt/gopath/src/github.com/chaincode/chaincode_example02/java/
 
 Next, instantiate the chaincode on the channel. This will initialize the
 chaincode on the channel, set the endorsement policy for the chaincode, and
@@ -706,6 +742,15 @@ If we changed the syntax to ``OR`` then we would need only one endorsement.
     # notice that we must pass the -l flag after the chaincode name to identify the language
 
     peer chaincode instantiate -o orderer.example.com:7050 --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem -C $CHANNEL_NAME -n mycc -l node -v 1.0 -c '{"Args":["init","a", "100", "b","200"]}' -P "AND ('Org1MSP.peer','Org2MSP.peer')"
+
+**Java**
+
+.. note:: Please note, Java chaincode instantiation might take time as it compiles chaincode and
+          downloads docker container with java environment.
+
+.. code:: bash
+
+    peer chaincode instantiate -o orderer.example.com:7050 --tls --cafile /opt/gopath/src/github.com/hyperledger/fabric/peer/crypto/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem -C $CHANNEL_NAME -n mycc -l java -v 1.0 -c '{"Args":["init","a", "100", "b","200"]}' -P "AND ('Org1MSP.peer','Org2MSP.peer')"
 
 See the `endorsement
 policies <http://hyperledger-fabric.readthedocs.io/en/latest/endorsement-policies.html>`__
@@ -869,7 +914,7 @@ You should see the following output:
       2017-05-16 17:08:01.367 UTC [msp/identity] Sign -> DEBU 007 Sign: digest: E61DB37F4E8B0D32C9FE10E3936BA9B8CD278FAA1F3320B08712164248285C54
       Query Result: 90
       2017-05-16 17:08:15.158 UTC [main] main -> INFO 008 Exiting.....
-      ===================== Query successful on peer1.org2 on channel 'mychannel' ===================== 
+      ===================== Query successful on peer1.org2 on channel 'mychannel' =====================
 
       ===================== All GOOD, BYFN execution completed =====================
 

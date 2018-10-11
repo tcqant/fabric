@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package node
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/golang/protobuf/proto"
@@ -17,7 +18,6 @@ import (
 	"github.com/hyperledger/fabric/protos/utils"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/context"
 )
 
 func statusCmd() *cobra.Command {
@@ -47,6 +47,7 @@ func status() (err error) {
 	}
 	signer, err := common.GetDefaultSignerFnc()
 	if err != nil {
+		fmt.Println(&pb.ServerStatus{Status: pb.ServerStatus_UNKNOWN})
 		return errors.Errorf("failed obtaining default signer: %v", err)
 	}
 

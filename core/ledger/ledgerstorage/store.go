@@ -1,34 +1,27 @@
 /*
-Copyright IBM Corp. 2017 All Rights Reserved.
+Copyright IBM Corp. All Rights Reserved.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-		 http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+SPDX-License-Identifier: Apache-2.0
 */
 
 package ledgerstorage
 
 import (
-	"fmt"
 	"sync"
 
-	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
-
+	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage/fsblkstorage"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
+	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
 	"github.com/hyperledger/fabric/core/ledger/pvtdatastorage"
 	"github.com/hyperledger/fabric/protos/common"
+	"github.com/pkg/errors"
 )
+
+var logger = flogging.MustGetLogger("ledgerstorage")
+var isMissingDataReconEnabled = false
 
 // Provider encapusaltes two providers 1) block store provider and 2) and pvt data store provider
 type Provider struct {
@@ -95,20 +88,48 @@ func (s *Store) Init(btlPolicy pvtdatapolicy.BTLPolicy) {
 
 // CommitWithPvtData commits the block and the corresponding pvt data in an atomic operation
 func (s *Store) CommitWithPvtData(blockAndPvtdata *ledger.BlockAndPvtData) error {
+	blockNum := blockAndPvtdata.Block.Header.Number
+	missingDataList := blockAndPvtdata.Missing
+
+	if !isMissingDataReconEnabled {
+		// should not store any entries for missing data
+		missingDataList = nil
+	}
+
 	s.rwlock.Lock()
 	defer s.rwlock.Unlock()
-	var pvtdata []*ledger.TxPvtData
-	for _, v := range blockAndPvtdata.BlockPvtData {
-		pvtdata = append(pvtdata, v)
-	}
-	if err := s.pvtdataStore.Prepare(blockAndPvtdata.Block.Header.Number, pvtdata); err != nil {
+
+	pvtBlkStoreHt, err := s.pvtdataStore.LastCommittedBlockHeight()
+	if err != nil {
 		return err
 	}
+
+	writtenToPvtStore := false
+	if pvtBlkStoreHt < blockNum+1 { // The pvt data store sanity check does not allow rewriting the pvt data.
+		// when re-processing blocks (rejoin the channel or re-fetching last few block),
+		// skip the pvt data commit to the pvtdata blockstore
+		logger.Debugf("Writing block [%d] to pvt block store", blockNum)
+		var pvtdata []*ledger.TxPvtData
+		for _, v := range blockAndPvtdata.BlockPvtData {
+			pvtdata = append(pvtdata, v)
+		}
+		if err := s.pvtdataStore.Prepare(blockAndPvtdata.Block.Header.Number, pvtdata, missingDataList); err != nil {
+			return err
+		}
+		writtenToPvtStore = true
+	} else {
+		logger.Debugf("Skipping writing block [%d] to pvt block store as the store height is [%d]", blockNum, pvtBlkStoreHt)
+	}
+
 	if err := s.AddBlock(blockAndPvtdata.Block); err != nil {
 		s.pvtdataStore.Rollback()
 		return err
 	}
-	return s.pvtdataStore.Commit()
+
+	if writtenToPvtStore {
+		return s.pvtdataStore.Commit()
+	}
+	return nil
 }
 
 // GetPvtDataAndBlockByNum returns the block and the corresponding pvt data.
@@ -148,6 +169,20 @@ func (s *Store) getPvtDataByNumWithoutLock(blockNum uint64, filter ledger.PvtNsC
 		return nil, err
 	}
 	return pvtdata, nil
+}
+
+// GetMissingPvtDataInfoForMostRecentBlocks invokes the function on underlying pvtdata store
+func (s *Store) GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.MissingPvtDataInfo, error) {
+	// it is safe to not acquire a read lock. Without a lock, the value of lastCommittedBlock
+	// can change due to a new block commit. As a result, we may not be able to fetch the
+	// missing data info of the most recent block. This decision was made to ensure that
+	// the block commit rate is not affected.
+	return s.pvtdataStore.GetMissingPvtDataInfoForMostRecentBlocks(maxBlock)
+}
+
+// ProcessCollsEligibilityEnabled invokes the function on underlying pvtdata store
+func (s *Store) ProcessCollsEligibilityEnabled(committingBlk uint64, nsCollMap map[string][]string) error {
+	return s.pvtdataStore.ProcessCollsEligibilityEnabled(committingBlk, nsCollMap)
 }
 
 // init first invokes function `initFromExistingBlockchain`
@@ -225,7 +260,7 @@ func (s *Store) syncPvtdataStoreWithBlockStore() error {
 		return s.pvtdataStore.Commit()
 	}
 
-	return fmt.Errorf("This is not expected. blockStoreHeight=%d, pvtdataStoreHeight=%d", bcInfo.Height, pvtdataStoreHt)
+	return errors.Errorf("This is not expected. blockStoreHeight=%d, pvtdataStoreHeight=%d", bcInfo.Height, pvtdataStoreHt)
 }
 
 func constructPvtdataMap(pvtdata []*ledger.TxPvtData) map[uint64]*ledger.TxPvtData {

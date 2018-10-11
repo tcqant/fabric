@@ -5,10 +5,8 @@ package server
 
 import (
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,12 +16,13 @@ import (
 	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger/fabric/common/flogging/floggingtest"
 	"github.com/hyperledger/fabric/common/localmsp"
 	genesisconfig "github.com/hyperledger/fabric/common/tools/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/core/config/configtest"
+	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
-	"github.com/op/go-logging"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -100,39 +99,53 @@ func TestInitializeServerConfig(t *testing.T) {
 	goodFile := "main.go"
 	badFile := "does_not_exist"
 
-	logger.SetBackend(logging.AddModuleLevel(newPanicOnCriticalBackend()))
-	defer func() {
-		logger = logging.MustGetLogger("orderer/main")
-	}()
+	oldLogger := logger
+	defer func() { logger = oldLogger }()
+	logger, _ = floggingtest.NewTestLogger(t)
 
 	testCases := []struct {
-		name              string
-		certificate       string
-		privateKey        string
-		rootCA            string
-		clientCertificate string
+		name           string
+		certificate    string
+		privateKey     string
+		rootCA         string
+		clientRootCert string
+		clusterCert    string
+		clusterKey     string
+		clusterCA      string
 	}{
-		{"BadCertificate", badFile, goodFile, goodFile, goodFile},
-		{"BadPrivateKey", goodFile, badFile, goodFile, goodFile},
-		{"BadRootCA", goodFile, goodFile, badFile, goodFile},
-		{"BadClientCertificate", goodFile, goodFile, goodFile, badFile},
+		{"BadCertificate", badFile, goodFile, goodFile, goodFile, "", "", ""},
+		{"BadPrivateKey", goodFile, badFile, goodFile, goodFile, "", "", ""},
+		{"BadRootCA", goodFile, goodFile, badFile, goodFile, "", "", ""},
+		{"BadClientRootCertificate", goodFile, goodFile, goodFile, badFile, "", "", ""},
+		{"ClusterBadCertificate", goodFile, goodFile, goodFile, goodFile, badFile, goodFile, goodFile},
+		{"ClusterBadPrivateKey", goodFile, goodFile, goodFile, goodFile, goodFile, badFile, goodFile},
+		{"ClusterBadRootCA", goodFile, goodFile, goodFile, goodFile, goodFile, goodFile, badFile},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			conf := &localconfig.TopLevel{
+				General: localconfig.General{
+					TLS: localconfig.TLS{
+						Enabled:            true,
+						ClientAuthRequired: true,
+						Certificate:        tc.certificate,
+						PrivateKey:         tc.privateKey,
+						RootCAs:            []string{tc.rootCA},
+						ClientRootCAs:      []string{tc.clientRootCert},
+					},
+					Cluster: localconfig.Cluster{
+						ClientCertificate: tc.clusterCert,
+						ClientPrivateKey:  tc.clusterKey,
+						RootCAs:           []string{tc.clusterCA},
+					},
+				},
+			}
 			assert.Panics(t, func() {
-				initializeServerConfig(
-					&localconfig.TopLevel{
-						General: localconfig.General{
-							TLS: localconfig.TLS{
-								Enabled:            true,
-								ClientAuthRequired: true,
-								Certificate:        tc.certificate,
-								PrivateKey:         tc.privateKey,
-								RootCAs:            []string{tc.rootCA},
-								ClientRootCAs:      []string{tc.clientCertificate},
-							},
-						},
-					})
+				if tc.clusterCert == "" {
+					initializeServerConfig(conf)
+				} else {
+					initializeClusterConfig(conf)
+				}
 			},
 			)
 		})
@@ -180,11 +193,13 @@ func TestInitializeBootstrapChannel(t *testing.T) {
 
 			if tc.panics {
 				assert.Panics(t, func() {
-					initializeBootstrapChannel(bootstrapConfig, ledgerFactory)
+					genesisBlock := extractGenesisBlock(bootstrapConfig)
+					initializeBootstrapChannel(genesisBlock, ledgerFactory)
 				})
 			} else {
 				assert.NotPanics(t, func() {
-					initializeBootstrapChannel(bootstrapConfig, ledgerFactory)
+					genesisBlock := extractGenesisBlock(bootstrapConfig)
+					initializeBootstrapChannel(genesisBlock, ledgerFactory)
 				})
 			}
 		})
@@ -213,10 +228,10 @@ func TestInitializeLocalMsp(t *testing.T) {
 		})
 	})
 	t.Run("Error", func(t *testing.T) {
-		logger.SetBackend(logging.AddModuleLevel(newPanicOnCriticalBackend()))
-		defer func() {
-			logger = logging.MustGetLogger("orderer/main")
-		}()
+		oldLogger := logger
+		defer func() { logger = oldLogger }()
+		logger, _ = floggingtest.NewTestLogger(t)
+
 		assert.Panics(t, func() {
 			initializeLocalMsp(
 				&localconfig.TopLevel{
@@ -235,7 +250,7 @@ func TestInitializeMultiChainManager(t *testing.T) {
 	conf := genesisConfig(t)
 	assert.NotPanics(t, func() {
 		initializeLocalMsp(conf)
-		initializeMultichannelRegistrar(conf, localmsp.NewSigner())
+		initializeMultichannelRegistrar(false, &cluster.PredicateDialer{}, comm.ServerConfig{}, nil, conf, localmsp.NewSigner())
 	})
 }
 
@@ -296,7 +311,7 @@ func TestUpdateTrustedRoots(t *testing.T) {
 			updateTrustedRoots(grpcServer, caSupport, bundle)
 		}
 	}
-	initializeMultichannelRegistrar(genesisConfig(t), localmsp.NewSigner(), callback)
+	initializeMultichannelRegistrar(false, &cluster.PredicateDialer{}, comm.ServerConfig{}, nil, genesisConfig(t), localmsp.NewSigner(), callback)
 	t.Logf("# app CAs: %d", len(caSupport.AppRootCAsByChain[genesisconfig.TestChainID]))
 	t.Logf("# orderer CAs: %d", len(caSupport.OrdererRootCAsByChain[genesisconfig.TestChainID]))
 	// mutual TLS not required so no updates should have occurred
@@ -321,19 +336,26 @@ func TestUpdateTrustedRoots(t *testing.T) {
 		AppRootCAsByChain:     make(map[string][][]byte),
 		OrdererRootCAsByChain: make(map[string][][]byte),
 	}
+
+	predDialer := &cluster.PredicateDialer{}
+	clusterConf := initializeClusterConfig(conf)
+	predDialer.SetConfig(clusterConf)
+
 	callback = func(bundle *channelconfig.Bundle) {
 		if grpcServer.MutualTLSRequired() {
 			t.Log("callback called")
 			updateTrustedRoots(grpcServer, caSupport, bundle)
+			updateClusterDialer(caSupport, predDialer, clusterConf.SecOpts.ServerRootCAs)
 		}
 	}
-	initializeMultichannelRegistrar(genesisConfig(t), localmsp.NewSigner(), callback)
+	initializeMultichannelRegistrar(false, &cluster.PredicateDialer{}, comm.ServerConfig{}, nil, genesisConfig(t), localmsp.NewSigner(), callback)
 	t.Logf("# app CAs: %d", len(caSupport.AppRootCAsByChain[genesisconfig.TestChainID]))
 	t.Logf("# orderer CAs: %d", len(caSupport.OrdererRootCAsByChain[genesisconfig.TestChainID]))
 	// mutual TLS is required so updates should have occurred
 	// we expect an intermediate and root CA for apps and orderers
 	assert.Equal(t, 2, len(caSupport.AppRootCAsByChain[genesisconfig.TestChainID]))
 	assert.Equal(t, 2, len(caSupport.OrdererRootCAsByChain[genesisconfig.TestChainID]))
+	assert.Len(t, predDialer.Config.Load().(comm.ClientConfig).SecOpts.ServerRootCAs, 2)
 	grpcServer.Listener().Close()
 }
 
@@ -358,22 +380,4 @@ func genesisConfig(t *testing.T) *localconfig.TopLevel {
 			},
 		},
 	}
-}
-
-func newPanicOnCriticalBackend() *panicOnCriticalBackend {
-	return &panicOnCriticalBackend{
-		backend: logging.AddModuleLevel(logging.NewLogBackend(os.Stderr, "", log.LstdFlags)),
-	}
-}
-
-type panicOnCriticalBackend struct {
-	backend logging.Backend
-}
-
-func (b *panicOnCriticalBackend) Log(level logging.Level, calldepth int, record *logging.Record) error {
-	err := b.backend.Log(level, calldepth, record)
-	if level == logging.CRITICAL {
-		panic(record.Formatted(calldepth))
-	}
-	return err
 }

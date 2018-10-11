@@ -95,7 +95,7 @@ var _ = Describe("CouchDB Runner", func() {
 			ID: "container-id",
 			NetworkSettings: &docker.NetworkSettings{
 				Ports: map[docker.Port][]docker.PortBinding{
-					docker.Port("5984/tcp"): []docker.PortBinding{{
+					docker.Port("5984/tcp"): {{
 						HostIP:   couchHost,
 						HostPort: couchPort,
 					}},
@@ -195,13 +195,10 @@ var _ = Describe("CouchDB Runner", func() {
 
 		By("terminating the container")
 		process.Signal(syscall.SIGTERM)
-		Eventually(process.Wait()).Should(Receive())
+		Eventually(process.Wait(), time.Minute).Should(Receive())
 		process = nil
 
-		Eventually(func() error {
-			_, err = client.InspectContainer(containerName)
-			return err
-		}).Should(MatchError("No such container: " + containerName))
+		Eventually(ContainerExists(client, containerName)).Should(BeFalse())
 	})
 
 	It("can be started and stopped with ifrit", func() {
@@ -238,7 +235,7 @@ var _ = Describe("CouchDB Runner", func() {
 				HostConfig: &docker.HostConfig{
 					AutoRemove: true,
 					PortBindings: map[docker.Port][]docker.PortBinding{
-						docker.Port("5984/tcp"): []docker.PortBinding{{
+						docker.Port("5984/tcp"): {{
 							HostIP:   "127.0.0.1",
 							HostPort: "33333",
 						}},

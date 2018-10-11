@@ -42,6 +42,7 @@ type General struct {
 	ListenAddress  string
 	ListenPort     uint16
 	TLS            TLS
+	Cluster        Cluster
 	Keepalive      Keepalive
 	GenesisMethod  string
 	GenesisProfile string
@@ -54,6 +55,14 @@ type General struct {
 	LocalMSPID     string
 	BCCSP          *bccsp.FactoryOpts
 	Authentication Authentication
+}
+
+type Cluster struct {
+	RootCAs           []string
+	ClientCertificate string
+	ClientPrivateKey  string
+	DialTimeout       time.Duration
+	RPCTimeout        time.Duration
 }
 
 // Keepalive contains configuration for gRPC servers.
@@ -71,6 +80,13 @@ type TLS struct {
 	RootCAs            []string
 	ClientAuthRequired bool
 	ClientRootCAs      []string
+}
+
+// SASLPlain contains configuration for SASL/PLAIN authentication
+type SASLPlain struct {
+	Enabled  bool
+	User     string
+	Password string
 }
 
 // Authentication contains configuration parameters related to authenticating
@@ -98,10 +114,12 @@ type RAMLedger struct {
 
 // Kafka contains configuration for the Kafka-based orderer.
 type Kafka struct {
-	Retry   Retry
-	Verbose bool
-	Version sarama.KafkaVersion // TODO Move this to global config
-	TLS     TLS
+	Retry     Retry
+	Verbose   bool
+	Version   sarama.KafkaVersion // TODO Move this to global config
+	TLS       TLS
+	SASLPlain SASLPlain
+	Topic     Topic
 }
 
 // Retry contains configuration related to retries and timeouts when the
@@ -145,6 +163,11 @@ type Producer struct {
 // read from a Kafa partition.
 type Consumer struct {
 	RetryBackoff time.Duration
+}
+
+// Topic contains the settings to use when creating Kafka topics
+type Topic struct {
+	ReplicationFactor int16
 }
 
 // Debug contains configuration for the orderer's debug parameters.
@@ -211,6 +234,9 @@ var Defaults = TopLevel{
 		TLS: TLS{
 			Enabled: false,
 		},
+		Topic: Topic{
+			ReplicationFactor: 3,
+		},
 	},
 	Debug: Debug{
 		BroadcastTraceDir: "",
@@ -243,7 +269,15 @@ func Load() (*TopLevel, error) {
 
 func (c *TopLevel) completeInitialization(configDir string) {
 	defer func() {
-		// Translate any paths
+		// Translate any paths for cluster TLS configuration if applicable
+		if c.General.Cluster.ClientPrivateKey != "" {
+			coreconfig.TranslatePathInPlace(configDir, &c.General.Cluster.ClientPrivateKey)
+		}
+		if c.General.Cluster.ClientCertificate != "" {
+			coreconfig.TranslatePathInPlace(configDir, &c.General.Cluster.ClientCertificate)
+		}
+		c.General.Cluster.RootCAs = translateCAs(configDir, c.General.Cluster.RootCAs)
+		// Translate any paths for general TLS configuration
 		c.General.TLS.RootCAs = translateCAs(configDir, c.General.TLS.RootCAs)
 		c.General.TLS.ClientRootCAs = translateCAs(configDir, c.General.TLS.ClientRootCAs)
 		coreconfig.TranslatePathInPlace(configDir, &c.General.TLS.PrivateKey)
@@ -262,7 +296,7 @@ func (c *TopLevel) completeInitialization(configDir string) {
 			logger.Infof("General.ListenAddress unset, setting to %s", Defaults.General.ListenAddress)
 			c.General.ListenAddress = Defaults.General.ListenAddress
 		case c.General.ListenPort == 0:
-			logger.Infof("General.ListenPort unset, setting to %s", Defaults.General.ListenPort)
+			logger.Infof("General.ListenPort unset, setting to %v", Defaults.General.ListenPort)
 			c.General.ListenPort = Defaults.General.ListenPort
 
 		case c.General.LogLevel == "":
@@ -287,6 +321,11 @@ func (c *TopLevel) completeInitialization(configDir string) {
 			logger.Panicf("General.Kafka.TLS.PrivateKey must be set if General.Kafka.TLS.Enabled is set to true.")
 		case c.Kafka.TLS.Enabled && c.Kafka.TLS.RootCAs == nil:
 			logger.Panicf("General.Kafka.TLS.CertificatePool must be set if General.Kafka.TLS.Enabled is set to true.")
+
+		case c.Kafka.SASLPlain.Enabled && c.Kafka.SASLPlain.User == "":
+			logger.Panic("General.Kafka.SASLPlain.User must be set if General.Kafka.SASLPlain.Enabled is set to true.")
+		case c.Kafka.SASLPlain.Enabled && c.Kafka.SASLPlain.Password == "":
+			logger.Panic("General.Kafka.SASLPlain.Password must be set if General.Kafka.SASLPlain.Enabled is set to true.")
 
 		case c.General.Profile.Enabled && c.General.Profile.Address == "":
 			logger.Infof("Profiling enabled and General.Profile.Address unset, setting to %s", Defaults.General.Profile.Address)

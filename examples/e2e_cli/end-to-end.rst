@@ -38,7 +38,7 @@ On Windows machines you will also need the following which provides a better alt
           development environment with limited functionality. It is
           suitable to run docker based scenarios, such as
           :doc:`getting_started`, but you may not be able to find a
-          suitable ``make`` command to successfuly go through the
+          suitable ``make`` command to successfully go through the
           scenario described here.
 
 Setting the $GOPATH
@@ -150,7 +150,7 @@ Configuration Transaction Generator
 -----------------------------------
 
 The `configtxgen
-tool <https://github.com/hyperledger/fabric/blob/master/docs/source/configtxgen.rst>`__
+tool <https://github.com/hyperledger/fabric/blob/master/docs/source/configtx.rst>`__
 is used to create four artifacts: orderer **bootstrap block**, fabric
 **channel configuration transaction**, and two **anchor peer transactions** - one
 for each Peer Org.

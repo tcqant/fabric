@@ -28,6 +28,14 @@ func New(aclProvider aclmgmt.ACLProvider) *LedgerQuerier {
 	}
 }
 
+func (e *LedgerQuerier) Name() string              { return "qscc" }
+func (e *LedgerQuerier) Path() string              { return "github.com/hyperledger/fabric/core/scc/qscc" }
+func (e *LedgerQuerier) InitArgs() [][]byte        { return nil }
+func (e *LedgerQuerier) Chaincode() shim.Chaincode { return e }
+func (e *LedgerQuerier) InvokableExternal() bool   { return true }
+func (e *LedgerQuerier) InvokableCC2CC() bool      { return true }
+func (e *LedgerQuerier) Enabled() bool             { return true }
+
 // LedgerQuerier implements the ledger query functions, including:
 // - GetChainInfo returns BlockchainInfo
 // - GetBlockByNumber returns a block
@@ -94,7 +102,7 @@ func (e *LedgerQuerier) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 	// 2. check the channel reader policy
 	res := getACLResource(fname)
 	if err = e.aclProvider.CheckACL(res, cid, sp); err != nil {
-		return shim.Error(fmt.Sprintf("Authorization request for [%s][%s] failed: [%s]", fname, cid, err))
+		return shim.Error(fmt.Sprintf("access denied for [%s][%s]: [%s]", fname, cid, err))
 	}
 
 	switch fname {

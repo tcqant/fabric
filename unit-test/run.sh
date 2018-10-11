@@ -24,7 +24,7 @@ plugin_packages=(
 
 # packages which need to be tested with build tag pkcs11
 pkcs11_packages=(
-    "github.com/hyperledger/fabric/bccsp"
+    "github.com/hyperledger/fabric/bccsp/..."
 )
 
 # obtain packages changed since some git refspec
@@ -65,12 +65,17 @@ serial_test_packages() {
     fi
 }
 
-# "go test" the provided packages. Packages that are not prsent in the serial package list
+# "go test" the provided packages. Packages that are not present in the serial package list
 # will be tested in parallel
 run_tests() {
     local flags="-cover"
     if [ -n "${VERBOSE}" ]; then
-      flags="${flags} -v"
+        flags="${flags} -v"
+    fi
+
+    local race_flags=""
+    if [[ "$(uname -m)" == "x86_64" ]]; then
+        race_flags="-race"
     fi
 
     echo ${GO_TAGS}
@@ -78,10 +83,10 @@ run_tests() {
     time {
         local parallel=$(parallel_test_packages "$@")
         if [ -n "${parallel}" ]; then
-            go test ${flags} -tags "$GO_TAGS" ${parallel[@]} -short -timeout=20m
+            go test ${flags} ${race_flags} -tags "$GO_TAGS" ${parallel[@]} -short -timeout=20m
         fi
 
-        local serial=$(serial_test_packages "$@")
+        local serial=$(serial_test_packages "$@") # race is disabled as well
         if [ -n "${serial}" ]; then
             go test ${flags} -tags "$GO_TAGS" ${serial[@]} -short -p 1 -timeout=20m
         fi

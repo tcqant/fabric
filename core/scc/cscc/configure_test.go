@@ -29,6 +29,8 @@ import (
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/chaincode"
 	"github.com/hyperledger/fabric/core/chaincode/accesscontrol"
+	"github.com/hyperledger/fabric/core/chaincode/platforms"
+	"github.com/hyperledger/fabric/core/chaincode/platforms/golang"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/container"
@@ -136,7 +138,7 @@ func TestConfigerInvokeInvalidParameters(t *testing.T) {
 	args := [][]byte{[]byte("GetChannels")}
 	res = stub.MockInvokeWithSignedProposal("3", args, nil)
 	assert.Equal(t, res.Status, int32(shim.ERROR), "CSCC invoke expected to fail no signed proposal provided")
-	assert.Contains(t, res.Message, "failed authorization check")
+	assert.Contains(t, res.Message, "access denied for [GetChannels]")
 
 	args = [][]byte{[]byte("fooFunction"), []byte("testChainID")}
 	res = stub.MockInvoke("5", args)
@@ -222,6 +224,7 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 		ca.CertBytes(),
 		certGenerator,
 		&ccprovider.CCInfoFSImpl{},
+		nil,
 		mockAclProvider,
 		container.NewVMController(
 			map[string]container.VMProvider{
@@ -229,6 +232,8 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 			},
 		),
 		mp,
+		platforms.NewRegistry(&golang.Platform{}),
+		peer.DefaultSupport,
 	)
 
 	// Init the policy checker
@@ -301,7 +306,7 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 	if res.Status == shim.OK {
 		t.Fatalf("cscc invoke JoinChain must fail : %v", res.Message)
 	}
-	assert.Contains(t, res.Message, "\"JoinChain\" request failed authorization check for channel")
+	assert.Contains(t, res.Message, "access denied for [JoinChain][mytestchainid]")
 	sProp.Signature = sProp.ProposalBytes
 
 	// Query the configuration block
@@ -317,7 +322,7 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 	args = [][]byte{[]byte("GetConfigBlock"), []byte(chainID)}
 	res = stub.MockInvokeWithSignedProposal("2", args, sProp)
 	if res.Status == shim.OK {
-		t.Fatalf("cscc invoke GetConfigBlock shoulda have failed: %v", res.Message)
+		t.Fatalf("cscc invoke GetConfigBlock should have failed: %v", res.Message)
 	}
 	assert.Contains(t, res.Message, "Failed authorization")
 	mockAclProvider.AssertExpectations(t)
@@ -399,7 +404,7 @@ func TestGetConfigTree(t *testing.T) {
 		aclProvider.CheckACLReturns(fmt.Errorf("fake-error"))
 		res := pc.InvokeNoShim(args, nil)
 		assert.NotEqual(t, int32(shim.OK), res.Status)
-		assert.Equal(t, "\"GetConfigTree\" request failed authorization check for channel [testchan]: [fake-error]", res.Message)
+		assert.Equal(t, "access denied for [GetConfigTree][testchan]: fake-error", res.Message)
 	})
 }
 
@@ -481,7 +486,7 @@ func TestSimulateConfigTreeUpdate(t *testing.T) {
 		aclProvider.CheckACLReturns(fmt.Errorf("fake-error"))
 		res := pc.InvokeNoShim(args, nil)
 		assert.NotEqual(t, int32(shim.OK), res.Status)
-		assert.Equal(t, "\"SimulateConfigTreeUpdate\" request failed authorization check for channel [testchan]: [fake-error]", res.Message)
+		assert.Equal(t, "access denied for [SimulateConfigTreeUpdate][testchan]: fake-error", res.Message)
 	})
 }
 

@@ -37,16 +37,17 @@ default embedded LevelDB, and move to CouchDB if you require the additional comp
 It is a good practice to model chaincode asset data as JSON, so that you have the option to perform
 complex rich queries if needed in the future.
 
-.. note:: A JSON document cannot use the following field names at the top level.
-   These are reserved for internal use.
+.. note:: The key for a CouchDB JSON document cannot begin with an underscore ("_").  Also, a JSON
+   document cannot use the following field names at the top level.  These are reserved for internal use.
 
-   - ``_deleted``
-   - ``_id``
-   - ``_rev``
+   - ``Any field beginning with an underscore, "_"``
    - ``~version``
 
 Using CouchDB from Chaincode
 ----------------------------
+
+Chaincode queries
+~~~~~~~~~~~~~~~~~
 
 Most of the `chaincode shim APIs <https://godoc.org/github.com/hyperledger/fabric/core/chaincode/shim#ChaincodeStubInterface>`__
 can be utilized with either LevelDB or CouchDB state database, e.g. ``GetState``, ``PutState``,
@@ -64,6 +65,36 @@ syntax:
 .. code:: bash
 
   {"selector":{"docType":"marble","owner":<OWNER_ID>}}
+
+.. couchdb-pagination:
+
+CouchDB pagination
+^^^^^^^^^^^^^^^^^^
+
+Fabric supports paging of query results for rich queries and range based queries.
+APIs supporting pagination allow the use of page size and bookmarks to be used for
+both range and rich queries.
+
+If a pagesize is specified using the paginated query APIs (``GetStateByRangeWithPagination``,
+``GetStateByPartialCompositeKeyWithPagination()``, and ``GetQueryResultWithPagination()``),
+a set of results will be returned along with a bookmark. The bookmark can be used
+with a follow on query to receive the next "page" of results.
+
+All chaincode queries are bound by ``totalQueryLimit`` (default 100000)
+from ``core.yaml``. This is the maximum number of results that chaincode
+will iterate through and return to the client, in order to avoid accidental
+or malicious long-running queries.
+
+An example using pagination is included in the :doc:`couchdb_tutorial` tutorial.
+
+.. note:: Regardless of whether chaincode uses paginated queries or not, the peer will
+          query CouchDB in batches based on ``internalQueryLimit`` (default 1000)
+          from ``core.yaml``. This behavior ensures reasonably sized result sets are
+          passed between the peer and CouchDB, and is transparent to chaincode and
+          requires no additional configuration.
+
+CouchDB indexes
+~~~~~~~~~~~~~~~
 
 Indexes in CouchDB are required in order to make JSON queries efficient and are required for
 any JSON query with a sort. Indexes can be packaged alongside chaincode in a
@@ -127,6 +158,8 @@ Below is the ``stateDatabase`` section from *core.yaml*:
       # goleveldb - default state database stored in goleveldb.
       # CouchDB - store state database in CouchDB
       stateDatabase: goleveldb
+      # Limit on the number of records to return per query
+      totalQueryLimit: 10000
       couchDBConfig:
          # It is recommended to run CouchDB on the same server as the peer, and
          # not map the CouchDB container port to a server port in docker-compose.
@@ -146,8 +179,21 @@ Below is the ``stateDatabase`` section from *core.yaml*:
          maxRetriesOnStartup: 10
          # CouchDB request timeout (unit: duration, e.g. 20s)
          requestTimeout: 35s
-         # Limit on the number of records to return per query
-         queryLimit: 10000
+         # Limit on the number of records per each CouchDB query
+         # Note that chaincode queries are only bound by totalQueryLimit.
+         # Internally the chaincode may execute multiple CouchDB queries,
+         # each of size internalQueryLimit.
+         internalQueryLimit: 1000
+         # Limit on the number of records per CouchDB bulk update batch
+         maxBatchUpdateSize: 1000
+         # Warm indexes after every N blocks.
+         # This option warms any indexes that have been
+         # deployed to CouchDB after every N blocks.
+         # A value of 1 will warm indexes after every block commit,
+         # to ensure fast selector queries.
+         # Increasing the value may improve write efficiency of peer and CouchDB,
+         # but may degrade query response time.
+         warmIndexesAfterNBlocks: 1
 
 CouchDB hosted in docker containers supplied with Hyperledger Fabric have the
 capability of setting the CouchDB username and password with environment

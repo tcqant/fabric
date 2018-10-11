@@ -26,7 +26,6 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/core/peer"
 	"github.com/hyperledger/fabric/core/policy"
-	"github.com/hyperledger/fabric/events/producer"
 	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
@@ -49,6 +48,14 @@ func New(ccp ccprovider.ChaincodeProvider, sccp sysccprovider.SystemChaincodePro
 		aclProvider: aclProvider,
 	}
 }
+
+func (e *PeerConfiger) Name() string              { return "cscc" }
+func (e *PeerConfiger) Path() string              { return "github.com/hyperledger/fabric/core/scc/cscc" }
+func (e *PeerConfiger) InitArgs() [][]byte        { return nil }
+func (e *PeerConfiger) Chaincode() shim.Chaincode { return e }
+func (e *PeerConfiger) InvokableExternal() bool   { return true }
+func (e *PeerConfiger) InvokableCC2CC() bool      { return false }
+func (e *PeerConfiger) Enabled() bool             { return true }
 
 // PeerConfiger implements the configuration handler for the peer. For every
 // configuration transaction coming in from the ordering service, the
@@ -142,8 +149,7 @@ func (e *PeerConfiger) InvokeNoShim(args [][]byte, sp *pb.SignedProposal) pb.Res
 		// 2. check local MSP Admins policy
 		// TODO: move to ACLProvider once it will support chainless ACLs
 		if err = e.policyChecker.CheckPolicyNoChannel(mgmt.Admins, sp); err != nil {
-			return shim.Error(fmt.Sprintf("\"JoinChain\" request failed authorization check "+
-				"for channel [%s]: [%s]", cid, err))
+			return shim.Error(fmt.Sprintf("access denied for [%s][%s]: [%s]", fname, cid, err))
 		}
 
 		// Initialize txsFilter if it does not yet exist. We can do this safely since
@@ -159,28 +165,28 @@ func (e *PeerConfiger) InvokeNoShim(args [][]byte, sp *pb.SignedProposal) pb.Res
 	case GetConfigBlock:
 		// 2. check policy
 		if err = e.aclProvider.CheckACL(resources.Cscc_GetConfigBlock, string(args[1]), sp); err != nil {
-			return shim.Error(fmt.Sprintf("\"GetConfigBlock\" request failed authorization check for channel [%s]: [%s]", args[1], err))
+			return shim.Error(fmt.Sprintf("access denied for [%s][%s]: %s", fname, args[1], err))
 		}
 
 		return getConfigBlock(args[1])
 	case GetConfigTree:
 		// 2. check policy
 		if err = e.aclProvider.CheckACL(resources.Cscc_GetConfigTree, string(args[1]), sp); err != nil {
-			return shim.Error(fmt.Sprintf("\"GetConfigTree\" request failed authorization check for channel [%s]: [%s]", args[1], err))
+			return shim.Error(fmt.Sprintf("access denied for [%s][%s]: %s", fname, args[1], err))
 		}
 
 		return e.getConfigTree(args[1])
 	case SimulateConfigTreeUpdate:
 		// Check policy
 		if err = e.aclProvider.CheckACL(resources.Cscc_SimulateConfigTreeUpdate, string(args[1]), sp); err != nil {
-			return shim.Error(fmt.Sprintf("\"SimulateConfigTreeUpdate\" request failed authorization check for channel [%s]: [%s]", args[1], err))
+			return shim.Error(fmt.Sprintf("access denied for [%s][%s]: %s", fname, args[1], err))
 		}
 		return e.simulateConfigTreeUpdate(args[1], args[2])
 	case GetChannels:
 		// 2. check local MSP Members policy
 		// TODO: move to ACLProvider once it will support chainless ACLs
 		if err = e.policyChecker.CheckPolicyNoChannel(mgmt.Members, sp); err != nil {
-			return shim.Error(fmt.Sprintf("\"GetChannels\" request failed authorization check: [%s]", err))
+			return shim.Error(fmt.Sprintf("access denied for [%s]: %s", fname, err))
 		}
 
 		return getChannels()
@@ -232,15 +238,6 @@ func joinChain(chainID string, block *common.Block, ccp ccprovider.ChaincodeProv
 	}
 
 	peer.InitChain(chainID)
-
-	bevent, _, _, err := producer.CreateBlockEvents(block)
-	if err != nil {
-		cnflogger.Errorf("Error processing block events for block number [%d]: %s", block.Header.Number, err)
-	} else {
-		if err := producer.Send(bevent); err != nil {
-			cnflogger.Errorf("Channel [%s] Error sending block event for block number [%d]: %s", chainID, block.Header.Number, err)
-		}
-	}
 
 	return shim.Success(nil)
 }

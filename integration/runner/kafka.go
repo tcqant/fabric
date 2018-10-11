@@ -32,6 +32,7 @@ type Kafka struct {
 	HostPort      int
 	ContainerPort docker.Port
 	Name          string
+	NetworkName   string
 	StartTimeout  time.Duration
 
 	MessageMaxBytes              int
@@ -40,7 +41,7 @@ type Kafka struct {
 	DefaultReplicationFactor     int
 	MinInsyncReplicas            int
 	BrokerID                     int
-	ZookeeperConnect             string
+	ZooKeeperConnect             string
 	ReplicaFetchResponseMaxBytes int
 	AdvertisedListeners          string
 	LogLevel                     string
@@ -48,8 +49,6 @@ type Kafka struct {
 	ErrorStream  io.Writer
 	OutputStream io.Writer
 
-	NetworkID        string
-	NetworkName      string
 	ContainerID      string
 	HostAddress      string
 	ContainerAddress string
@@ -97,8 +96,8 @@ func (k *Kafka) Run(sigCh <-chan os.Signal, ready chan<- struct{}) error {
 		k.MinInsyncReplicas = 1
 	}
 
-	if k.ZookeeperConnect == "" {
-		k.ZookeeperConnect = "zookeeper:2181/kafka"
+	if k.ZooKeeperConnect == "" {
+		k.ZooKeeperConnect = "zookeeper:2181/kafka"
 	}
 
 	if k.MessageMaxBytes == 0 {
@@ -116,36 +115,40 @@ func (k *Kafka) Run(sigCh <-chan os.Signal, ready chan<- struct{}) error {
 	if k.LogLevel == "" {
 		k.LogLevel = "warn"
 	}
-	hostConfig := &docker.HostConfig{
-		AutoRemove: true,
-		PortBindings: map[docker.Port][]docker.PortBinding{
-			k.ContainerPort: []docker.PortBinding{{
-				HostIP:   k.HostIP,
-				HostPort: strconv.Itoa(k.HostPort),
-			}},
+
+	containerOptions := docker.CreateContainerOptions{
+		Name: k.Name,
+		Config: &docker.Config{
+			Image: k.Image,
+			Env:   k.buildEnv(),
 		},
-	}
-
-	config := &docker.Config{
-		Image: k.Image,
-		Env:   k.buildEnv(),
-	}
-
-	networkingConfig := &docker.NetworkingConfig{
-		EndpointsConfig: map[string]*docker.EndpointConfig{
-			k.NetworkName: &docker.EndpointConfig{
-				NetworkID: k.NetworkID,
+		HostConfig: &docker.HostConfig{
+			AutoRemove: true,
+			PortBindings: map[docker.Port][]docker.PortBinding{
+				k.ContainerPort: {{
+					HostIP:   k.HostIP,
+					HostPort: strconv.Itoa(k.HostPort),
+				}},
 			},
 		},
 	}
 
-	container, err := k.Client.CreateContainer(
-		docker.CreateContainerOptions{
-			Name:             k.Name,
-			Config:           config,
-			HostConfig:       hostConfig,
-			NetworkingConfig: networkingConfig,
-		})
+	if k.NetworkName != "" {
+		nw, err := k.Client.NetworkInfo(k.NetworkName)
+		if err != nil {
+			return err
+		}
+
+		containerOptions.NetworkingConfig = &docker.NetworkingConfig{
+			EndpointsConfig: map[string]*docker.EndpointConfig{
+				k.NetworkName: {
+					NetworkID: nw.ID,
+				},
+			},
+		}
+	}
+
+	container, err := k.Client.CreateContainer(containerOptions)
 	if err != nil {
 		return err
 	}
@@ -208,13 +211,14 @@ func (k *Kafka) Run(sigCh <-chan os.Signal, ready chan<- struct{}) error {
 func (k *Kafka) buildEnv() []string {
 	env := []string{
 		"KAFKA_LOG_RETENTION_MS=-1",
+		//"KAFKA_AUTO_CREATE_TOPICS_ENABLE=false",
 		fmt.Sprintf("KAFKA_MESSAGE_MAX_BYTES=%d", k.MessageMaxBytes),
 		fmt.Sprintf("KAFKA_REPLICA_FETCH_MAX_BYTES=%d", k.ReplicaFetchMaxBytes),
 		fmt.Sprintf("KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE=%s", strconv.FormatBool(k.UncleanLeaderElectionEnable)),
 		fmt.Sprintf("KAFKA_DEFAULT_REPLICATION_FACTOR=%d", k.DefaultReplicationFactor),
 		fmt.Sprintf("KAFKA_MIN_INSYNC_REPLICAS=%d", k.MinInsyncReplicas),
 		fmt.Sprintf("KAFKA_BROKER_ID=%d", k.BrokerID),
-		fmt.Sprintf("KAFKA_ZOOKEEPER_CONNECT=%s", k.ZookeeperConnect),
+		fmt.Sprintf("KAFKA_ZOOKEEPER_CONNECT=%s", k.ZooKeeperConnect),
 		fmt.Sprintf("KAFKA_REPLICA_FETCH_RESPONSE_MAX_BYTES=%d", k.ReplicaFetchResponseMaxBytes),
 		fmt.Sprintf("KAFKA_ADVERTISED_LISTENERS=EXTERNAL://localhost:%d,%s://%s:9093", k.HostPort, k.NetworkName, k.Name),
 		fmt.Sprintf("KAFKA_LISTENERS=EXTERNAL://0.0.0.0:9092,%s://0.0.0.0:9093", k.NetworkName),

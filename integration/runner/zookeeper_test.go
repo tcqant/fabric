@@ -22,11 +22,11 @@ import (
 	"github.com/tedsuo/ifrit"
 )
 
-var _ = Describe("Zookeeper Runner", func() {
+var _ = Describe("ZooKeeper Runner", func() {
 	var (
 		errBuffer *gbytes.Buffer
 		outBuffer *gbytes.Buffer
-		zookeeper *runner.Zookeeper
+		zookeeper *runner.ZooKeeper
 
 		process ifrit.Process
 	)
@@ -37,7 +37,7 @@ var _ = Describe("Zookeeper Runner", func() {
 
 		errBuffer = gbytes.NewBuffer()
 		outBuffer = gbytes.NewBuffer()
-		zookeeper = &runner.Zookeeper{
+		zookeeper = &runner.ZooKeeper{
 			Name:         "zookeeper0",
 			StartTimeout: time.Second,
 			ErrorStream:  io.MultiWriter(errBuffer, GinkgoWriter),
@@ -61,7 +61,7 @@ var _ = Describe("Zookeeper Runner", func() {
 		zookeeper.Client = nil
 		zookeeper.StartTimeout = 5 * time.Second
 
-		By("starting zookeeper")
+		By("starting ZooKeeper")
 		process = ifrit.Invoke(zookeeper)
 		Eventually(process.Ready(), runner.DefaultStartTimeout).Should(BeClosed())
 		Consistently(process.Wait(), 5*time.Second).ShouldNot(Receive())
@@ -85,11 +85,13 @@ var _ = Describe("Zookeeper Runner", func() {
 		By("terminating the container")
 		err = zookeeper.Stop()
 		Expect(err).NotTo(HaveOccurred())
+
+		Eventually(ContainerExists(zookeeper.Client, "zookeeper0")).Should(BeFalse())
 	})
 
 	It("starts and stops multiple zookeepers", func() {
 		client, err := docker.NewClientFromEnv()
-		zk1 := &runner.Zookeeper{
+		zk1 := &runner.ZooKeeper{
 			Name:         "zookeeper1",
 			ZooMyID:      1,
 			ZooServers:   "server.1=zookeeper1:2888:3888 server.2=zookeeper2:2888:3888 server.3=zookeeper3:2888:3888",
@@ -99,7 +101,7 @@ var _ = Describe("Zookeeper Runner", func() {
 		err = zk1.Start()
 		Expect(err).NotTo(HaveOccurred())
 
-		zk2 := &runner.Zookeeper{
+		zk2 := &runner.ZooKeeper{
 			Name:         "zookeeper2",
 			ZooMyID:      2,
 			ZooServers:   "server.1=zookeeper1:2888:3888 server.2=zookeeper2:2888:3888 server.3=zookeeper3:2888:3888",
@@ -109,7 +111,7 @@ var _ = Describe("Zookeeper Runner", func() {
 		err = zk2.Start()
 		Expect(err).NotTo(HaveOccurred())
 
-		zk3 := &runner.Zookeeper{
+		zk3 := &runner.ZooKeeper{
 			Name:         "zookeeper3",
 			ZooMyID:      3,
 			ZooServers:   "server.1=zookeeper1:2888:3888 server.2=zookeeper2:2888:3888 server.3=zookeeper3:2888:3888",
@@ -129,11 +131,12 @@ var _ = Describe("Zookeeper Runner", func() {
 		Expect(container.Config.Env).To(ContainElement(ContainSubstring("ZOO_MY_ID=3")))
 		Expect(container.Config.Env).To(ContainElement(ContainSubstring("ZOO_SERVERS=server.1=zookeeper1:2888:3888 server.2=zookeeper2:2888:3888 server.3=zookeeper3:2888:3888")))
 
-		err = zk3.Stop()
-		Expect(err).NotTo(HaveOccurred())
-		err = zk2.Stop()
-		Expect(err).NotTo(HaveOccurred())
-		err = zk1.Stop()
-		Expect(err).NotTo(HaveOccurred())
+		Expect(zk3.Stop()).To(Succeed())
+		Expect(zk2.Stop()).To(Succeed())
+		Expect(zk1.Stop()).To(Succeed())
+
+		Eventually(ContainerExists(zk1.Client, "zookeeper1")).Should(BeFalse())
+		Eventually(ContainerExists(zk2.Client, "zookeeper2")).Should(BeFalse())
+		Eventually(ContainerExists(zk3.Client, "zookeeper3")).Should(BeFalse())
 	})
 })

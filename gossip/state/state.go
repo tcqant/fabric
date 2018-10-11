@@ -418,8 +418,7 @@ func (s *GossipStateProviderImpl) handleStateRequest(msg proto.ReceivedMessage) 
 		block, pvtData, err := s.ledger.GetPvtDataAndBlockByNum(seqNum, peerAuthInfo)
 
 		if err != nil {
-			logger.Errorf("Wasn't able to read block with sequence number %d from ledger, "+
-				"due to %+v skipping....", seqNum, errors.WithStack(err))
+			logger.Errorf("cannot read block number %d from ledger, because %+v, skipping...", seqNum, err)
 			continue
 		}
 
@@ -483,7 +482,7 @@ func (s *GossipStateProviderImpl) handleStateResponse(msg proto.ReceivedMessage)
 
 		err := s.addPayload(payload, blocking)
 		if err != nil {
-			logger.Warningf("Payload with sequence number %d wasn't added to payload buffer: %v", payload.SeqNum, err)
+			logger.Warningf("Block [%d] received from block transfer wasn't added to payload buffer: %v", payload.SeqNum, err)
 		}
 	}
 	return max, nil
@@ -516,10 +515,10 @@ func (s *GossipStateProviderImpl) queueNewMessage(msg *proto.GossipMessage) {
 	dataMsg := msg.GetDataMsg()
 	if dataMsg != nil {
 		if err := s.addPayload(dataMsg.GetPayload(), nonBlocking); err != nil {
-			logger.Warning("Failed adding payload:", err)
+			logger.Warningf("Block [%d] received from gossip wasn't added to payload buffer: %v", dataMsg.Payload.SeqNum, err)
 			return
 		}
-		logger.Debugf("Received new payload with sequence number = [%d]", dataMsg.Payload.SeqNum)
+
 	} else {
 		logger.Debug("Gossip message received is not of data message type, usually this should not happen.")
 	}
@@ -532,7 +531,7 @@ func (s *GossipStateProviderImpl) deliverPayloads() {
 		select {
 		// Wait for notification that next seq has arrived
 		case <-s.payloads.Ready():
-			logger.Debugf("Ready to transfer payloads to the ledger, next sequence number is = [%d]", s.payloads.Next())
+			logger.Debugf("[%s] Ready to transfer payloads (blocks) to the ledger, next block number is = [%d]", s.chainID, s.payloads.Next())
 			// Collect all subsequent payloads
 			for payload := s.payloads.Pop(); payload != nil; payload = s.payloads.Pop() {
 				rawBlock := &common.Block{}
@@ -545,7 +544,7 @@ func (s *GossipStateProviderImpl) deliverPayloads() {
 						payload.SeqNum, rawBlock.Header, rawBlock.Data)
 					continue
 				}
-				logger.Debug("New block with claimed sequence number ", payload.SeqNum, " transactions num ", len(rawBlock.Data.Data))
+				logger.Debugf("[%s] Transferring block [%d] with %d transaction(s) to the ledger", s.chainID, payload.SeqNum, len(rawBlock.Data.Data))
 
 				// Read all private data into slice
 				var p util.PvtDataCollections
@@ -597,7 +596,7 @@ func (s *GossipStateProviderImpl) antiEntropy() {
 				continue
 			}
 
-			s.requestBlocksInRange(uint64(ourHeight), uint64(maxHeight))
+			s.requestBlocksInRange(uint64(ourHeight), uint64(maxHeight)-1)
 		}
 	}
 }
@@ -620,7 +619,7 @@ func (s *GossipStateProviderImpl) maxAvailableLedgerHeight() uint64 {
 }
 
 // GetBlocksInRange capable to acquire blocks with sequence
-// numbers in the range [start...end].
+// numbers in the range [start...end).
 func (s *GossipStateProviderImpl) requestBlocksInRange(start uint64, end uint64) {
 	atomic.StoreInt32(&s.stateTransferActive, 1)
 	defer atomic.StoreInt32(&s.stateTransferActive, 0)
@@ -635,19 +634,19 @@ func (s *GossipStateProviderImpl) requestBlocksInRange(start uint64, end uint64)
 
 		for !responseReceived {
 			if tryCounts > defAntiEntropyMaxRetries {
-				logger.Warningf("Wasn't  able to get blocks in range [%d...%d], after %d retries",
+				logger.Warningf("Wasn't  able to get blocks in range [%d...%d), after %d retries",
 					prev, next, tryCounts)
 				return
 			}
 			// Select peers to ask for blocks
 			peer, err := s.selectPeerToRequestFrom(next)
 			if err != nil {
-				logger.Warningf("Cannot send state request for blocks in range [%d...%d], due to %+v",
+				logger.Warningf("Cannot send state request for blocks in range [%d...%d), due to %+v",
 					prev, next, errors.WithStack(err))
 				return
 			}
 
-			logger.Debugf("State transfer, with peer %s, requesting blocks in range [%d...%d], "+
+			logger.Debugf("State transfer, with peer %s, requesting blocks in range [%d...%d), "+
 				"for chainID %s", peer.Endpoint, prev, next, s.chainID)
 
 			s.mediator.Send(gossipMsg, peer)
@@ -748,7 +747,7 @@ func (s *GossipStateProviderImpl) addPayload(payload *proto.Payload, blockingMod
 	if payload == nil {
 		return errors.New("Given payload is nil")
 	}
-	logger.Debug("Adding new payload into the buffer, seqNum = ", payload.SeqNum)
+	logger.Debugf("[%s] Adding payload to local buffer, blockNum = [%d]", s.chainID, payload.SeqNum)
 	height, err := s.ledger.LedgerHeight()
 	if err != nil {
 		return errors.Wrap(err, "Failed obtaining ledger height")
@@ -776,7 +775,7 @@ func (s *GossipStateProviderImpl) commitBlock(block *common.Block, pvtData util.
 
 	// Update ledger height
 	s.mediator.UpdateLedgerHeight(block.Header.Number+1, common2.ChainID(s.chainID))
-	logger.Debugf("Channel [%s]: Created block [%d] with %d transaction(s)",
+	logger.Debugf("[%s] Committed block [%d] with %d transaction(s)",
 		s.chainID, block.Header.Number, len(block.Data.Data))
 
 	return nil

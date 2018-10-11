@@ -17,6 +17,7 @@ limitations under the License.
 package node
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -31,7 +32,6 @@ import (
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/net/context"
 )
 
 type testServiceServer struct{}
@@ -80,18 +80,21 @@ func TestStatus(t *testing.T) {
 		name          string
 		peerAddress   string
 		listenAddress string
+		timeout       time.Duration
 		shouldSucceed bool
 	}{
 		{
 			name:          "status function to success",
 			peerAddress:   "localhost:7071",
 			listenAddress: "localhost:7071",
+			timeout:       time.Second,
 			shouldSucceed: true,
 		},
 		{
 			name:          "admin client error",
 			peerAddress:   "",
 			listenAddress: "localhost:7072",
+			timeout:       100 * time.Millisecond,
 			shouldSucceed: false,
 		},
 	}
@@ -101,7 +104,7 @@ func TestStatus(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Logf("Running test: %s", test.name)
 			viper.Set("peer.address", test.peerAddress)
-			viper.Set("peer.client.connTimeout", 10*time.Millisecond)
+			viper.Set("peer.client.connTimeout", test.timeout)
 			peerServer, err := peer.NewPeerServer(test.listenAddress, comm.ServerConfig{})
 			if err != nil {
 				t.Fatalf("Failed to create peer server (%s)", err)
